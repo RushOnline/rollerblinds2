@@ -1,0 +1,374 @@
+###################################################################################
+# Wemos D1 mini https://www.wemos.cc/en/latest/_static/files/sch_d1_mini_v3.0.0.pdf
+###################################################################################
+# D1 - TMC2208 DIR
+# D2 - TMC2208 STEP
+# D3 (pu) - DEBUG: Toggle button
+# D4 (pu) - Top endstop (reed switch).
+#
+# D0 - IR receiver (data pin has internal 33k pullup)
+# D5 - AM2301
+# D6 -NC (TODO: TMC SERIAL INTERFACE)
+# D7 - TMC2208 SLEEP
+# D8 (pd) - NC (TODO: BEEPER)
+
+esphome:
+  name: rollerblinds
+  platform: ESP8266
+  board: d1_mini
+  esp8266_restore_from_flash: false
+  includes:
+    # Stepper control helper object "stepper_control"
+    - rb.h
+  libraries:
+    # Once we will control coils current
+    - SPI
+    - teemuatlut/TMCStepper
+  on_boot:
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: endstop
+          then:
+            - lambda: |-
+                // Stop stepper and set current position is 0
+                id(xstepper).report_position(0);
+                id(xstepper).set_target(0);
+            - state_machine.set: OPEN
+            - cover.template.publish:
+                id: Blind
+                state: OPEN
+                current_operation: IDLE
+
+substitutions:
+  max_opening_time: '25000'
+  max_closing_time: '24000'
+
+
+globals:
+  
+  - id: g_steps
+    type: int
+    initial_value: '20000' # 10 оборотов на 200 шагов на 2 микрошага
+  
+  - id: g_open_timeout
+    type: int
+    initial_value: ${max_opening_time}
+
+  - id: g_close_timeout
+    type: int
+    initial_value: ${max_closing_time}
+
+  - id: g_max_speed
+    type: int
+    initial_value: '1000'
+
+  - id: g_xceleration
+    type: int
+    initial_value: '500'
+
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/muxa/esphome-state-machine
+      # backup url:
+      # url: https://github.com/RushOnline/esphome-state-machine
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  password: ""
+  services:
+    - service: blind_control
+      variables:
+        speed: int
+        steps: int
+        acceleration: int
+        open_timeout: int
+        close_timeout: int
+      then:
+        - stepper.set_speed:
+            id: xstepper
+            speed: !lambda 'return speed;'
+        - stepper.set_acceleration:
+            id: xstepper
+            acceleration: !lambda 'return acceleration;'
+        - stepper.set_deceleration:
+            id: xstepper
+            deceleration: !lambda 'return acceleration;'
+        - globals.set:
+            id: g_steps
+            value: !lambda 'return steps;'
+        - globals.set:
+            id: g_open_timeout
+            value: !lambda 'return open_timeout;'
+        - globals.set:
+            id: g_close_timeout
+            value: !lambda 'return close_timeout;'
+      
+ota:
+  password: ""
+
+wifi:
+  # Content of files secret/wifi.yaml is:
+  # ssid: "SSID"
+  # password: "PASSWORD"
+  <<: !include secrets/wifi.yaml
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "RollerBlinds"
+    password: ""
+
+captive_portal:
+
+# AM2301
+sensor:
+  - platform: dht
+    pin:
+      number: D5
+      mode: INPUT_PULLUP
+    temperature:
+      name: "Living Room Temperature"
+    humidity:
+      name: "Living Room Humidity"
+    update_interval: 5min
+
+# IR receiver
+remote_receiver:
+  pin: D0
+  dump: all
+
+# Stepper
+# ENN  - Enable not input. The power stage becomes switched off (all motor outputs floating) when this pin becomes driven to a high level.
+# DIR  - DIR input (internal pull-down resistor)
+# STEP - STEP input
+#
+# Timings:
+# DIR -20ns-> STEP
+# STEP -20ns-> DIR
+# DIR -100ns-> !DIR
+stepper:
+  - platform: a4988
+    id: xstepper
+    dir_pin: D1
+    step_pin: D2
+    sleep_pin:
+      number: D7
+      mode: OUTPUT
+      inverted: true
+    max_speed: 200
+    acceleration: 100
+    deceleration: 100
+  
+# Example configuration entry
+cover:
+  - platform: template
+    name: "Blinder Shtoren"
+    id: Blind
+    device_class: "blind"
+    lambda: |-
+      if (id(blind_sm).current_state() == "CLOSED") {
+        return COVER_CLOSED;
+      } else {
+        return COVER_OPEN;
+      }
+    open_action:
+      - state_machine.transition: DO_OPEN
+    close_action:
+      - state_machine.transition: DO_CLOSE
+    stop_action:
+      - state_machine.transition: DO_STOP
+    assumed_state: true
+
+text_sensor:
+  - platform: state_machine
+    name: Blind State Machine Sensor
+
+state_machine:
+  - name: "Blind State Machine"
+    id: blind_sm
+    initial_state: UNKNOWN
+    states:
+
+      - name: UNKNOWN
+        on_set: # stop cover at system startup
+          - lambda:  "stepper_control.stop();"
+          - cover.template.publish:
+              id: Blind
+              current_operation: IDLE
+        on_enter:
+          - lambda:  "stepper_control.stop();"
+          - cover.template.publish:
+              id: Blind
+              current_operation: IDLE
+      
+      - name: IDLE
+        on_enter:
+          - lambda:  "stepper_control.stop();"
+          - cover.template.publish:
+              id: Blind
+              current_operation: IDLE
+      
+      - name: HOMING
+        on_enter:
+          - lambda: |-
+              // set real stepper settings
+              stepper_control.config(g_steps->value(), g_max_speed->value(), g_xceleration->value());
+              // set stepper position slightly above maximum and move to zero
+              id(xstepper).report_position(id(g_steps) + 100);
+              id(xstepper).set_target(0);
+          - cover.template.publish:
+              id: Blind
+              current_operation: OPENING
+          - wait_until:
+              condition:
+                lambda: |-
+                  return id(xstepper).current_position == id(xstepper).target_position;
+              timeout: 20s
+          - state_machine.transition: TIMEOUT
+      
+      - name: OPEN
+        on_enter:
+          - lambda:  "stepper_control.stop();"
+          - cover.template.publish:
+              id: Blind
+              state: OPEN
+              current_operation: IDLE
+      
+      - name: CLOSED
+        on_enter:
+          - lambda:  "stepper_control.stop();"
+          - cover.template.publish:
+              id: Blind
+              state: CLOSED
+              current_operation: IDLE
+      
+      - name: OPENING
+        on_enter:
+          - lambda:  "id(xstepper).set_target(0);"
+          - cover.template.publish:
+              id: Blind
+              current_operation: OPENING
+          - wait_until:
+              condition:
+                lambda: |-
+                  if ( id(xstepper). has_reached_target() )
+                    id(blind_sm).transition("REACH_TARGET");
+                  return false;
+              timeout:
+                milliseconds: ${max_opening_time}
+          - state_machine.transition: TIMEOUT
+      
+      - name: CLOSING
+        on_enter:
+          - lambda:  "id(xstepper).set_target(id(g_steps));"
+          - cover.template.publish:
+              id: Blind
+              current_operation: CLOSING
+          - wait_until:
+              condition:
+                lambda: |-
+                  if ( id(xstepper). has_reached_target() )
+                    id(blind_sm).transition("REACH_TARGET");
+                  return false;
+              timeout:
+                milliseconds: ${max_closing_time}
+          - state_machine.transition: TIMEOUT
+    
+    inputs:
+      - name: ENDSTOP
+        transitions:
+          - HOMING -> OPEN
+          - OPENING -> OPEN
+          - CLOSING -> OPEN
+          - UNKNOWN -> OPEN
+        action:
+          lambda: |-
+            id(xstepper).report_position(0);
+            id(xstepper).set_target(0);
+      
+      - name: TOGGLE
+        transitions:
+          - UNKNOWN -> HOMING
+          - HOMING -> UNKNOWN
+          - OPEN -> CLOSING
+          - CLOSED -> OPENING
+          - OPENING -> IDLE
+          - IDLE -> CLOSING
+          - CLOSING -> IDLE
+      
+      - name: HOMING
+        transitions:
+          - UNKNOWN -> HOMING
+          - OPEN -> HOMING
+          - CLOSED -> HOMING
+          - IDLE -> HOMING
+          - OPENING -> IDLE
+          - CLOSING -> IDLE
+          
+      
+      - name: DO_OPEN
+        transitions:
+          - UNKNOWN -> HOMING
+          - CLOSED -> OPENING
+          - IDLE -> OPENING
+      
+      - name: DO_CLOSE
+        transitions:
+          - OPEN -> CLOSING
+          - IDLE -> CLOSING
+      
+      - name: DO_STOP
+        transitions:
+          - HOMING -> UNKNOWN
+          - OPENING -> IDLE
+          - CLOSING -> IDLE
+      
+      - name: REACH_TARGET
+        transitions:
+          - OPENING -> OPEN
+          - CLOSING -> CLOSED
+    
+      - name: TIMEOUT
+        transitions:
+          - HOMING -> UNKNOWN
+          - OPENING -> UNKNOWN
+          - CLOSING -> UNKNOWN
+        action:
+          lambda: |-
+            ESP_LOGD("TIMEOUT", "stepper position: %d", id(xstepper).current_position);
+    
+    diagram: true
+
+binary_sensor:
+  
+  - platform: gpio
+    id: endstop
+    pin:
+      number: D4
+      mode: INPUT # (D4 has 12k pullup on PCB)
+      inverted: true # signaled state is when the reed switch connect pin to the ground
+    on_press:
+      then:
+        - state_machine.transition: ENDSTOP
+  
+  - platform: gpio
+    id: toggle_button
+    pin:
+      number: D3
+      mode: INPUT_PULLUP
+      inverted: true # signaled state is when the button connect pin to the ground
+    on_click:
+    - min_length: 50ms
+      max_length: 350ms
+      then:
+        - state_machine.transition: TOGGLE
+    - min_length: 500ms
+      max_length: 2000ms
+      then:
+        - state_machine.transition: HOMING
