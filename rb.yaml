@@ -7,8 +7,8 @@
 # D3 GPIO0 (pu, connected to FLASH button, boot fails if pulled LOW) - DEBUG: Toggle button
 # D4 GPIO2 (pu, HIGH at boot, LED, boot fails if pulled LOW) - TMC2208 EN#
 #
-# D0 GPIO16 (HIGH at boot) - IR receiver (IR data pin has internal 33k pullup)
-# D5 GPIO14 - NC
+# D0 GPIO16 (HIGH at boot) - NC
+# D5 GPIO14 - IR receiver (want pullup)
 # D6 GPIO12 -Top endstop (reed switch).
 # D7 GPIO13 - AM2301
 # D8 GPIO15 (pd, Boot fails if pulled HIGH) - NC
@@ -33,6 +33,9 @@ esphome:
   on_boot:
     priority: -100.0
     then:
+      - lambda: |-
+          // set real stepper settings
+          stepper_control.config(g_steps->value(), g_max_speed->value(), g_xceleration->value());
       - if:
           condition:
             binary_sensor.is_on: endstop
@@ -51,7 +54,7 @@ substitutions:
   max_opening_time: '25000'
   max_closing_time: '24000'
   max_steps: '20000'
-  max_speed: '1000'
+  max_speed: '2000'
   max_xceleration: '500'
 
 globals:
@@ -150,11 +153,12 @@ sensor:
 # IR receiver
 remote_receiver:
   pin:
-    number: D0
-    #inverted: true
-    #mode: INPUT_PULLUP
+    number: D5
+    inverted: true
+    mode: INPUT_PULLUP
   dump: all
-  tolerance: 100
+  tolerance: 5%
+  filter: 100ms
 
 # Stepper
 # ENN  - Enable not input. The power stage becomes switched off (all motor outputs floating) when this pin becomes driven to a high level.
@@ -374,7 +378,7 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true # signaled state is when the reed switch connect pin to the ground
     filters:
-      - delayed_on_off: 100ms
+      - delayed_on_off: 30ms
     on_press:
       then:
         - state_machine.transition: ENDSTOP
