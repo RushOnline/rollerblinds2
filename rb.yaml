@@ -1,16 +1,22 @@
 ###################################################################################
 # Wemos D1 mini https://www.wemos.cc/en/latest/_static/files/sch_d1_mini_v3.0.0.pdf
+# https://randomnerdtutorials.com/esp8266-pinout-reference-gpios/
 ###################################################################################
-# D1 - TMC2208 DIR
-# D2 - TMC2208 STEP
-# D3 (pu) - DEBUG: Toggle button
-# D4 (pu) - Top endstop (reed switch).
+# D1 GPIO5 - TMC2208 DIR
+# D2 GPIO4 - TMC2208 STEP
+# D3 GPIO0 (pu, connected to FLASH button, boot fails if pulled LOW) - DEBUG: Toggle button
+# D4 GPIO2 (pu, HIGH at boot, LED, boot fails if pulled LOW) - TMC2208 EN#
 #
-# D0 - IR receiver (data pin has internal 33k pullup)
-# D5 - AM2301
-# D6 -NC (TODO: TMC SERIAL INTERFACE)
-# D7 - TMC2208 SLEEP
-# D8 (pd) - NC (TODO: BEEPER)
+# D0 GPIO16 (HIGH at boot) - IR receiver (IR data pin has internal 33k pullup)
+# D5 GPIO14 - NC
+# D6 GPIO12 -Top endstop (reed switch).
+# D7 GPIO13 - AM2301
+# D8 GPIO15 (pd, Boot fails if pulled HIGH) - NC
+#
+# RX GPIO3 (HIGH at boot) - TMC TX
+# TX GPIO1 (HIGH at boot, debug output at boot, boot fails if pulled LOW) - TMC RX
+#
+# TODO: BEEPER
 
 esphome:
   name: rollerblinds
@@ -25,6 +31,7 @@ esphome:
     - SPI
     - teemuatlut/TMCStepper
   on_boot:
+    priority: -100.0
     then:
       - if:
           condition:
@@ -43,13 +50,15 @@ esphome:
 substitutions:
   max_opening_time: '25000'
   max_closing_time: '24000'
-
+  max_steps: '20000'
+  max_speed: '1000'
+  max_xceleration: '500'
 
 globals:
   
   - id: g_steps
     type: int
-    initial_value: '20000' # 10 оборотов на 200 шагов на 2 микрошага
+    initial_value: ${max_steps} # 10 оборотов на 200 шагов на 2 микрошага
   
   - id: g_open_timeout
     type: int
@@ -61,11 +70,11 @@ globals:
 
   - id: g_max_speed
     type: int
-    initial_value: '1000'
+    initial_value: ${max_speed}
 
   - id: g_xceleration
     type: int
-    initial_value: '500'
+    initial_value: ${max_xceleration}
 
 
 external_components:
@@ -130,7 +139,7 @@ captive_portal:
 sensor:
   - platform: dht
     pin:
-      number: D5
+      number: D7
       mode: INPUT_PULLUP
     temperature:
       name: "Living Room Temperature"
@@ -140,8 +149,12 @@ sensor:
 
 # IR receiver
 remote_receiver:
-  pin: D0
+  pin:
+    number: D0
+    #inverted: true
+    #mode: INPUT_PULLUP
   dump: all
+  tolerance: 100
 
 # Stepper
 # ENN  - Enable not input. The power stage becomes switched off (all motor outputs floating) when this pin becomes driven to a high level.
@@ -152,18 +165,25 @@ remote_receiver:
 # DIR -20ns-> STEP
 # STEP -20ns-> DIR
 # DIR -100ns-> !DIR
+#
+# Fastest mode: microstep = 1/2 step
+# Fycetc TMC2208:
+# MS1 - HIGH
+# MS2 - LOW
+#
+
 stepper:
   - platform: a4988
     id: xstepper
     dir_pin: D1
     step_pin: D2
     sleep_pin:
-      number: D7
+      number: D4
       mode: OUTPUT
       inverted: true
-    max_speed: 200
-    acceleration: 100
-    deceleration: 100
+    max_speed: ${max_speed}
+    acceleration: ${max_xceleration}
+    deceleration: ${max_xceleration}
   
 # Example configuration entry
 cover:
@@ -350,9 +370,11 @@ binary_sensor:
   - platform: gpio
     id: endstop
     pin:
-      number: D4
-      mode: INPUT # (D4 has 12k pullup on PCB)
+      number: D6
+      mode: INPUT_PULLUP
       inverted: true # signaled state is when the reed switch connect pin to the ground
+    filters:
+      - delayed_on_off: 100ms
     on_press:
       then:
         - state_machine.transition: ENDSTOP
