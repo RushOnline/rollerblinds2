@@ -8,7 +8,7 @@
 # D4 GPIO2 (pu, HIGH at boot, LED, boot fails if pulled LOW) - TMC2208 EN#
 #
 # D0 GPIO16 (HIGH at boot) - NC
-# D5 GPIO14 - IR receiver (want pullup)
+# D5 GPIO14 - IR receiver
 # D6 GPIO12 -Top endstop (reed switch).
 # D7 GPIO13 - AM2301
 # D8 GPIO15 (pd, Boot fails if pulled HIGH) - NC
@@ -17,6 +17,14 @@
 # TX GPIO1 (HIGH at boot, debug output at boot, boot fails if pulled LOW) - TMC RX
 #
 # TODO: BEEPER
+# TODO: https://github.com/khoih-prog/ESP8266TimerInterrupt#12-set-hardware-timer-interval-and-attach-timer-interrupt-handler-function
+#
+# https://www.omc-stepperonline.com/support-stepper-motor/what-is-the-maximum-speed-highest-frequency-of-the-motor
+#
+# Nema 17:
+#  	Max. Speed (RPM): 2000
+#   Recommended. Working Speed (RPM): 200-600
+#
 
 esphome:
   name: rollerblinds
@@ -24,68 +32,12 @@ esphome:
   board: d1_mini
   esp8266_restore_from_flash: false
   includes:
-    # Stepper control helper object "stepper_control"
-    - rb.h
+    - stepper_cover.h
   libraries:
-    # Once we will control coils current
     - SPI
     - teemuatlut/TMCStepper
-  on_boot:
-    priority: -100.0
-    then:
-      - lambda: |-
-          // set real stepper settings
-          stepper_control.config(g_steps->value(), g_max_speed->value(), g_xceleration->value());
-      - if:
-          condition:
-            binary_sensor.is_on: endstop
-          then:
-            - lambda: |-
-                // Stop stepper and set current position is 0
-                id(xstepper).report_position(0);
-                id(xstepper).set_target(0);
-            - state_machine.set: OPEN
-            - cover.template.publish:
-                id: Blind
-                state: OPEN
-                current_operation: IDLE
-
-substitutions:
-  max_opening_time: '25000'
-  max_closing_time: '24000'
-  max_steps: '20000'
-  max_speed: '2000'
-  max_xceleration: '500'
-
-globals:
-  
-  - id: g_steps
-    type: int
-    initial_value: ${max_steps} # 10 оборотов на 200 шагов на 2 микрошага
-  
-  - id: g_open_timeout
-    type: int
-    initial_value: ${max_opening_time}
-
-  - id: g_close_timeout
-    type: int
-    initial_value: ${max_closing_time}
-
-  - id: g_max_speed
-    type: int
-    initial_value: ${max_speed}
-
-  - id: g_xceleration
-    type: int
-    initial_value: ${max_xceleration}
-
-
-external_components:
-  - source:
-      type: git
-      url: https://github.com/muxa/esphome-state-machine
-      # backup url:
-      # url: https://github.com/RushOnline/esphome-state-machine
+    - plerup/espsoftwareserial @ 6.8.5
+    - khoih-prog/ESP8266TimerInterrupt @ 1.4.1
 
 # Enable logging
 logger:
@@ -94,41 +46,11 @@ logger:
 # Enable Home Assistant API
 api:
   password: ""
-  services:
-    - service: blind_control
-      variables:
-        speed: int
-        steps: int
-        acceleration: int
-        open_timeout: int
-        close_timeout: int
-      then:
-        - stepper.set_speed:
-            id: xstepper
-            speed: !lambda 'return speed;'
-        - stepper.set_acceleration:
-            id: xstepper
-            acceleration: !lambda 'return acceleration;'
-        - stepper.set_deceleration:
-            id: xstepper
-            deceleration: !lambda 'return acceleration;'
-        - globals.set:
-            id: g_steps
-            value: !lambda 'return steps;'
-        - globals.set:
-            id: g_open_timeout
-            value: !lambda 'return open_timeout;'
-        - globals.set:
-            id: g_close_timeout
-            value: !lambda 'return close_timeout;'
       
 ota:
   password: ""
 
 wifi:
-  # Content of files secret/wifi.yaml is:
-  # ssid: "SSID"
-  # password: "PASSWORD"
   <<: !include secrets/wifi.yaml
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
@@ -150,16 +72,6 @@ sensor:
       name: "Living Room Humidity"
     update_interval: 5min
 
-# IR receiver
-remote_receiver:
-  pin:
-    number: D5
-    inverted: true
-    mode: INPUT_PULLUP
-  dump: all
-  tolerance: 5%
-  filter: 100ms
-
 # Stepper
 # ENN  - Enable not input. The power stage becomes switched off (all motor outputs floating) when this pin becomes driven to a high level.
 # DIR  - DIR input (internal pull-down resistor)
@@ -175,214 +87,21 @@ remote_receiver:
 # MS1 - HIGH
 # MS2 - LOW
 #
-
-stepper:
-  - platform: a4988
-    id: xstepper
-    dir_pin: D1
-    step_pin: D2
-    sleep_pin:
-      number: D4
-      mode: OUTPUT
-      inverted: true
-    max_speed: ${max_speed}
-    acceleration: ${max_xceleration}
-    deceleration: ${max_xceleration}
-  
-# Example configuration entry
+ 
 cover:
-  - platform: template
-    name: "Blinder Shtoren"
-    id: Blind
-    device_class: "blind"
+
+  - platform: custom
     lambda: |-
-      if (id(blind_sm).current_state() == "CLOSED") {
-        return COVER_CLOSED;
-      } else {
-        return COVER_OPEN;
-      }
-    open_action:
-      - state_machine.transition: DO_OPEN
-    close_action:
-      - state_machine.transition: DO_CLOSE
-    stop_action:
-      - state_machine.transition: DO_STOP
-    assumed_state: true
+      auto sc = new StepperCover();
+      App.register_component(sc);
+      return {sc};
 
-text_sensor:
-  - platform: state_machine
-    name: Blind State Machine Sensor
-
-state_machine:
-  - name: "Blind State Machine"
-    id: blind_sm
-    initial_state: UNKNOWN
-    states:
-
-      - name: UNKNOWN
-        on_set: # stop cover at system startup
-          - lambda:  "stepper_control.stop();"
-          - cover.template.publish:
-              id: Blind
-              current_operation: IDLE
-        on_enter:
-          - lambda:  "stepper_control.stop();"
-          - cover.template.publish:
-              id: Blind
-              current_operation: IDLE
-      
-      - name: IDLE
-        on_enter:
-          - lambda:  "stepper_control.stop();"
-          - cover.template.publish:
-              id: Blind
-              current_operation: IDLE
-      
-      - name: HOMING
-        on_enter:
-          - lambda: |-
-              // set real stepper settings
-              stepper_control.config(g_steps->value(), g_max_speed->value(), g_xceleration->value());
-              // set stepper position slightly above maximum and move to zero
-              id(xstepper).report_position(id(g_steps) + 100);
-              id(xstepper).set_target(0);
-          - cover.template.publish:
-              id: Blind
-              current_operation: OPENING
-          - wait_until:
-              condition:
-                lambda: |-
-                  return id(xstepper).current_position == id(xstepper).target_position;
-              timeout: 20s
-          - state_machine.transition: TIMEOUT
-      
-      - name: OPEN
-        on_enter:
-          - lambda:  "stepper_control.stop();"
-          - cover.template.publish:
-              id: Blind
-              state: OPEN
-              current_operation: IDLE
-      
-      - name: CLOSED
-        on_enter:
-          - lambda:  "stepper_control.stop();"
-          - cover.template.publish:
-              id: Blind
-              state: CLOSED
-              current_operation: IDLE
-      
-      - name: OPENING
-        on_enter:
-          - lambda:  "id(xstepper).set_target(0);"
-          - cover.template.publish:
-              id: Blind
-              current_operation: OPENING
-          - wait_until:
-              condition:
-                lambda: |-
-                  if ( id(xstepper). has_reached_target() )
-                    id(blind_sm).transition("REACH_TARGET");
-                  return false;
-              timeout:
-                milliseconds: ${max_opening_time}
-          - state_machine.transition: TIMEOUT
-      
-      - name: CLOSING
-        on_enter:
-          - lambda:  "id(xstepper).set_target(id(g_steps));"
-          - cover.template.publish:
-              id: Blind
-              current_operation: CLOSING
-          - wait_until:
-              condition:
-                lambda: |-
-                  if ( id(xstepper). has_reached_target() )
-                    id(blind_sm).transition("REACH_TARGET");
-                  return false;
-              timeout:
-                milliseconds: ${max_closing_time}
-          - state_machine.transition: TIMEOUT
-    
-    inputs:
-      - name: ENDSTOP
-        transitions:
-          - HOMING -> OPEN
-          - OPENING -> OPEN
-          - CLOSING -> OPEN
-          - UNKNOWN -> OPEN
-        action:
-          lambda: |-
-            id(xstepper).report_position(0);
-            id(xstepper).set_target(0);
-      
-      - name: TOGGLE
-        transitions:
-          - UNKNOWN -> HOMING
-          - HOMING -> UNKNOWN
-          - OPEN -> CLOSING
-          - CLOSED -> OPENING
-          - OPENING -> IDLE
-          - IDLE -> CLOSING
-          - CLOSING -> IDLE
-      
-      - name: HOMING
-        transitions:
-          - UNKNOWN -> HOMING
-          - OPEN -> HOMING
-          - CLOSED -> HOMING
-          - IDLE -> HOMING
-          - OPENING -> IDLE
-          - CLOSING -> IDLE
-          
-      
-      - name: DO_OPEN
-        transitions:
-          - UNKNOWN -> HOMING
-          - CLOSED -> OPENING
-          - IDLE -> OPENING
-      
-      - name: DO_CLOSE
-        transitions:
-          - OPEN -> CLOSING
-          - IDLE -> CLOSING
-      
-      - name: DO_STOP
-        transitions:
-          - HOMING -> UNKNOWN
-          - OPENING -> IDLE
-          - CLOSING -> IDLE
-      
-      - name: REACH_TARGET
-        transitions:
-          - OPENING -> OPEN
-          - CLOSING -> CLOSED
-    
-      - name: TIMEOUT
-        transitions:
-          - HOMING -> UNKNOWN
-          - OPENING -> UNKNOWN
-          - CLOSING -> UNKNOWN
-        action:
-          lambda: |-
-            ESP_LOGD("TIMEOUT", "stepper position: %d", id(xstepper).current_position);
-    
-    diagram: true
+    covers:
+      - name: "Rollerblinds"
+        id: rb
 
 binary_sensor:
-  
-  - platform: gpio
-    id: endstop
-    pin:
-      number: D6
-      mode: INPUT_PULLUP
-      inverted: true # signaled state is when the reed switch connect pin to the ground
-    filters:
-      - delayed_on_off: 30ms
-    on_press:
-      then:
-        - state_machine.transition: ENDSTOP
-  
+ 
   - platform: gpio
     id: toggle_button
     pin:
@@ -391,10 +110,10 @@ binary_sensor:
       inverted: true # signaled state is when the button connect pin to the ground
     on_click:
     - min_length: 50ms
-      max_length: 350ms
+      max_length: 300ms
       then:
-        - state_machine.transition: TOGGLE
-    - min_length: 500ms
-      max_length: 2000ms
+        - cover.open: rb
+    - min_length: 300ms
+      max_length: 1000ms
       then:
-        - state_machine.transition: HOMING
+      - lambda: 'static_cast<StepperCover*>(rb)->settle();'
