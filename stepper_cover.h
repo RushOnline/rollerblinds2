@@ -209,7 +209,7 @@ public:
 		{
 			ESP_LOGD(__FILE__, "cover.moveTo: %.1f, cover.position: %.1f", *call.get_position(), position);
 			auto pos = *call.get_position();
-			if (!settled && (pos == COVER_OPEN))
+			if (!settled || (pos == COVER_OPEN))
 				settle();
 			else
 				moveTo(pos);
