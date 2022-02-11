@@ -101,7 +101,24 @@ cover:
         id: rb
 
 binary_sensor:
- 
+  - platform: remote_receiver
+    id: remote_up
+    lg:
+      data: 0x00FF629D
+      nbits: 32
+    on_press:
+      then:
+        - cover.open: rb
+
+  - platform: remote_receiver
+    id: remote_down
+    lg:
+      data: 0x00FFA857
+      nbits: 32
+    on_press:
+      then:
+        - cover.close: rb
+
   - platform: gpio
     id: toggle_button
     pin:
@@ -117,3 +134,15 @@ binary_sensor:
       max_length: 1000ms
       then:
       - lambda: 'static_cast<StepperCover*>(rb)->settle();'
+
+# вверх 0x00FF629D
+# вниз  0x00FFA857
+# ок    0x00FF02FD
+# *     0x00FF42BD
+# #     0x00FF52AD
+remote_receiver:
+  pin:
+    number: D5
+    inverted: True
+    mode: INPUT_PULLUP
+  dump: lg
