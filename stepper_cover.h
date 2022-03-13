@@ -3,32 +3,19 @@
 
 #include "esphome.h"
 
-#include <SoftwareSerial.h>
 #include <TMCStepper.h>
 #include <ESP8266TimerInterrupt.h>
 
-#define	ENABLE_UART		0
-
 #define MAX_STEPS		26100
-
-// D1 GPIO5 - TMC DIR
-// D2 GPIO4 - TMC STEP
-// D4 GPIO2 (pu, HIGH at boot, LED, boot fails if pulled LOW) - TMC EN#
+#define HW_TIMER_FREQ	500
 
 #define DRIVER_DIR			D1
 #define DRIVER_STEP			D2
 #define DRIVER_ENN			D4
-
-// D6 GPIO12 -Top endstop (reed switch).
 #define ENDSTOP_PIN			D6
 
-#if (ENABLE_UART)
-	#define DRIVER_UART_PIN	0		// TMC2209 SoftwareSerial TX/RX pin
-	#define DRIVER_ADDRESS	0b00	// TMC2209 Driver address according to MS1 and MS2
-	#define DRIVER_R_SENSE	0.11f	// Match to your driver
-#endif//ENABLE_UART
-
-#define HW_TIMER_FREQ	2000
+#define DRIVER_ADDRESS	0b00	// TMC2209 Driver address according to MS1 and MS2
+#define DRIVER_R_SENSE	0.11f	// Match to your driver
 
 long stepper_position = 0;
 long stepper_target = 0;
@@ -67,26 +54,35 @@ class RushStepper
 {
 public:
 	void enable() {
+		ESP_LOGD(__FILE__, "stepper.enable()");
 		digitalWrite(DRIVER_ENN, LOW);
+		driver.begin();
+		driver.I_scale_analog(false);
+		driver.rms_current(300, 0.2f); // mA
+		driver.mstep_reg_select(true);
+		driver.microsteps(2);
+		driver.toff(5);               // Enables driver in software
+//  	driver.en_pwm_mode(true);     // Enable stealthChop
+		driver.pwm_autoscale(true);   // Needed for stealthChop
 	}
 
 	void disable() {
-		digitalWrite(DRIVER_ENN, HIGH);
+		ESP_LOGD(__FILE__, "stepper.disable(), pos: %d", stepper_position);
+		if (stepper_position < (MAX_STEPS/3))
+			digitalWrite(DRIVER_ENN, HIGH);
 	}
 
 	void stop() {
-		LOCK_TIMER;
 		ESP_LOGD(__FILE__, "stepper.stop()");
-		stepper_target = stepper_position;
-		stepper_direction = 0;
+		set_position(stepper_position);
 		disable();
-		UNLOCK_TIMER;
 	}
 
 	void set_position(long position) {
 		LOCK_TIMER;
-		stepper_position = position;
+		stepper_target = stepper_position = position;
 		stepper_direction = 0;
+		ignore_endstop = 0;
 		UNLOCK_TIMER;
 	}
 
@@ -106,7 +102,7 @@ public:
 			stepper_direction = 0;
 		} else {
 			if (at_endstop()) ignore_endstop = 100;
-			digitalWrite(DRIVER_DIR, (stepper_direction < 0) ? LOW : HIGH);
+			digitalWrite(DRIVER_DIR, (stepper_direction < 0) ? HIGH : LOW);
 			enable();
 		}
 		UNLOCK_TIMER;
@@ -119,9 +115,13 @@ public:
 
 		digitalWrite(DRIVER_DIR, LOW);
 		digitalWrite(DRIVER_STEP, LOW);
+		digitalWrite(DRIVER_ENN, LOW);
+
+		Serial.begin(115200);
+		set_position(MAX_STEPS);
+		enable();
 
 		ITimer.setFrequency(HW_TIMER_FREQ, TimerHandler);
-		stop();
 	}
 
 	void run() {
@@ -132,7 +132,7 @@ public:
 	}
 
 protected:
-	long position_{0};
+	TMC2209Stepper driver{&Serial, DRIVER_R_SENSE, DRIVER_ADDRESS};
 };
 
 
@@ -158,24 +158,10 @@ public:
 	{
         ESP_LOGD(__FILE__, "* cover setup");
 
-		stepper.setup();
-		stepper.disable();
-		stepper.stop();
-
-#if (ENABLE_UART)
-        ESP_LOGD(__FILE__, "UART setup");
-		serial.enableIntTx(false);
-		serial.begin(115200);
-
-		driver.begin();
-		driver.microsteps(2);
-		driver.rms_current(1200); // mA
-#endif//ENABLE_UART
-
 		pinMode(ENDSTOP_PIN, INPUT_PULLUP);
-
-
 		ESP_LOGD(__FILE__, "endstop: %s", (digitalRead(ENDSTOP_PIN) == LOW) ? "ON" : "OFF" );
+
+		stepper.setup();
 
 		if (at_endstop())
 		{
@@ -200,10 +186,13 @@ public:
 
 	}
 
+
 	// This will be called every time the user requests a state change.
 	void control(const CoverCall &call) override
 	{
         ESP_LOGD(__FILE__, "* cover control: cover: %.2f, stepper: %d", position, stepper.get_position());
+
+		stepper.enable();
 
 		if (call.get_position().has_value())
 		{
@@ -235,6 +224,7 @@ public:
 	{
 		if (!ignore_endstop && at_endstop() && stepper.is_running()) {
 			stepper.stop();
+			ignore_endstop = 0;
 			ESP_LOGD(__FILE__, "endstop detected");
 			position = COVER_OPEN;
 			stepper.set_position(pos2steps(position));
@@ -258,6 +248,8 @@ public:
 	}
 
 	void update() override {
+//		ESP_LOGD(__FILE__, "* update()");
+
 		static CoverOperation op = COVER_OPERATION_IDLE;
 		if (!stepper_direction && (op == COVER_OPERATION_IDLE)) return;
 
@@ -280,12 +272,12 @@ protected:
 
 	float steps2pos(long steps)
 	{
-		return (steps / float(MAX_STEPS));
+		return 1 - (steps / float(MAX_STEPS));
 	}
 
 	long pos2steps(float pos)
 	{
-		return pos * MAX_STEPS;
+		return (1 - pos) * MAX_STEPS;
 	}
 
 	void moveTo(float new_position)
@@ -309,13 +301,7 @@ protected:
 		publish_state();
 	}
 
-//	AccelStepper stepper{AccelStepper::DRIVER, DRIVER_STEP, DRIVER_DIR};
 	RushStepper stepper;
-
-#if (ENABLE_UART)
-	SoftwareSerial serial{DRIVER_UART_PIN};
-	TMC2209Stepper driver{&serial, DRIVER_R_SENSE, DRIVER_ADDRESS};
-#endif//ENABLE_UART
 
 };
 
