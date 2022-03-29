@@ -12,7 +12,7 @@
 #define DRIVER_DIR			D1
 #define DRIVER_STEP			D2
 #define DRIVER_ENN			D4
-#define ENDSTOP_PIN			D6
+#define ENDSTOP_PIN			D5
 
 #define DRIVER_ADDRESS	0b00	// TMC2209 Driver address according to MS1 and MS2
 #define DRIVER_R_SENSE	0.11f	// Match to your driver

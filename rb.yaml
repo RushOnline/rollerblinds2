@@ -7,9 +7,9 @@
 # D3 GPIO0 (pu, connected to FLASH button, boot fails if pulled LOW) - NC (devkit: Toggle button)
 # D4 GPIO2 (pu, HIGH at boot, LED, boot fails if pulled LOW) - TMC2208 EN#
 #
-# D0 GPIO16 (HIGH at boot) - NC
-# D5 GPIO14 - IR receiver
-# D6 GPIO12 -Top endstop (reed switch).
+# D0 GPIO16 (HIGH at boot) - AUX-SQUARE NC
+# D5 GPIO14 - AUX-ROUND Top endstop (reed switch)
+# D6 GPIO12 - IR receiver 
 # D7 GPIO13 - NC (devkit: AM2301)
 # D8 GPIO15 (pd, Boot fails if pulled HIGH) - NC
 #
@@ -27,7 +27,7 @@
 #
 
 esphome:
-  name: rollerblinds
+  name: shutter
   platform: ESP8266
   board: d1_mini
   esp8266_restore_from_flash: false
@@ -36,12 +36,12 @@ esphome:
   libraries:
     - SPI
     - teemuatlut/TMCStepper
-    - khoih-prog/ESP8266TimerInterrupt @ 1.4.1
+    - khoih-prog/ESP8266TimerInterrupt @ 1.6.0
 
 # Enable logging
 logger:
   level: DEBUG
-  baud_rate: 0
+  baud_rate: 115200
 
 # Enable Home Assistant API
 api:
@@ -60,45 +60,12 @@ wifi:
 
 captive_portal:
 
-# AM2301
-sensor:
-  - platform: dht
-    pin:
-      number: D7
-      mode: INPUT_PULLUP
-    temperature:
-      name: "Living Room Temperature"
-    humidity:
-      name: "Living Room Humidity"
-    update_interval: 5min
-
-# Stepper
-# ENN  - Enable not input. The power stage becomes switched off (all motor outputs floating) when this pin becomes driven to a high level.
-# DIR  - DIR input (internal pull-down resistor)
-# STEP - STEP input
-#
-# Timings:
-# DIR -20ns-> STEP
-# STEP -20ns-> DIR
-# DIR -100ns-> !DIR
-#
-# Fastest mode: microstep = 1/2 step
-# Fycetc TMC2208:
-# MS1 - HIGH
-# MS2 - LOW
-#
- 
-cover:
-
-  - platform: custom
-    lambda: |-
-      auto sc = new StepperCover();
-      App.register_component(sc);
-      return {sc};
-
-    covers:
-      - name: "Rollerblinds"
-        id: rb
+remote_receiver:
+  pin:
+    number: D6
+    inverted: True
+    mode: INPUT_PULLUP
+  dump: lg
 
 binary_sensor:
   - platform: remote_receiver
@@ -119,30 +86,66 @@ binary_sensor:
       then:
         - cover.close: rb
 
-  - platform: gpio
-    id: toggle_button
-    pin:
-      number: D3
-      mode: INPUT_PULLUP
-      inverted: true # signaled state is when the button connect pin to the ground
-    on_click:
-    - min_length: 50ms
-      max_length: 300ms
-      then:
-        - cover.open: rb
-    - min_length: 300ms
-      max_length: 1000ms
-      then:
-      - lambda: 'static_cast<StepperCover*>(rb)->settle();'
+cover:
+
+  - platform: custom
+    lambda: |-
+      auto sc = new StepperCover();
+      App.register_component(sc);
+      return {sc};
+
+    covers:
+      - name: "Rollerblinds"
+        id: rb
+
+
+  # - platform: gpio
+  #   id: toggle_button
+  #   pin:
+  #     number: D3
+  #     mode: INPUT_PULLUP
+  #     inverted: true # signaled state is when the button connect pin to the ground
+  #   on_click:
+  #   - min_length: 50ms
+  #     max_length: 300ms
+  #     then:
+  #       - cover.open: rb
+  #   - min_length: 300ms
+  #     max_length: 1000ms
+  #     then:
+  #     - lambda: 'static_cast<StepperCover*>(rb)->settle();'
+
+# AM2301
+# sensor:
+#   - platform: dht
+#     pin:
+#       number: D7
+#       mode: INPUT_PULLUP
+#     temperature:
+#       name: "Living Room Temperature"
+#     humidity:
+#       name: "Living Room Humidity"
+#     update_interval: 5min
+
+# Stepper
+# ENN  - Enable not input. The power stage becomes switched off (all motor outputs floating) when this pin becomes driven to a high level.
+# DIR  - DIR input (internal pull-down resistor)
+# STEP - STEP input
+#
+# Timings:
+# DIR -20ns-> STEP
+# STEP -20ns-> DIR
+# DIR -100ns-> !DIR
+#
+# Fastest mode: microstep = 1/2 step
+# Fycetc TMC2208:
+# MS1 - HIGH
+# MS2 - LOW
+#
+ 
 
 # вверх 0x00FF629D
 # вниз  0x00FFA857
 # ок    0x00FF02FD
 # *     0x00FF42BD
 # #     0x00FF52AD
-remote_receiver:
-  pin:
-    number: D5
-    inverted: True
-    mode: INPUT_PULLUP
-  dump: lg
