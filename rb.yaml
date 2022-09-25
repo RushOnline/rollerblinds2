@@ -97,7 +97,16 @@ binary_sensor:
     lg:
       data: 0x00FF02FD
       nbits: 32
-
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: 'return id(rb).current_operation == CoverOperation::COVER_OPERATION_IDLE;'
+            then:
+              - cover.toggle: rb
+            else:
+              - cover.stop: rb
+  
   - platform: remote_receiver
     id: remote_right
     lg:
