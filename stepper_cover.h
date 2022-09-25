@@ -238,12 +238,21 @@ public:
 
 	void settle() {
 		ESP_LOGD(__FILE__, "* HOMING REQUESTED");
-		settled = false;
-		stepper.set_position(pos2steps(COVER_CLOSED*2));
-		current_operation = COVER_OPERATION_CLOSING;
-		last_operation = COVER_OPERATION_IDLE;
-		position = COVER_CLOSED;
-		stepper.moveTo(pos2steps(COVER_OPEN*2));
+
+		if (at_endstop())
+		{
+			ESP_LOGD(__FILE__, "  already at top");
+			position = COVER_OPEN;
+			settled = true;
+		} else {
+			ESP_LOGD(__FILE__, "  start homing");
+			settled = false;
+			stepper.set_position(pos2steps(COVER_CLOSED*2));
+			current_operation = COVER_OPERATION_CLOSING;
+			last_operation = COVER_OPERATION_IDLE;
+			position = COVER_CLOSED;
+			stepper.moveTo(pos2steps(COVER_OPEN*2));
+		}
 		publish_state();
 	}
 
