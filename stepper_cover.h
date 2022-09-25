@@ -192,7 +192,10 @@ public:
 	{
         ESP_LOGD(__FILE__, "* cover control: cover: %.2f, stepper: %d", position, stepper.get_position());
 
-		stepper.enable();
+		//stepper.enable();
+
+		// enable break-to-exit
+		do {
 
 		if (call.get_position().has_value())
 		{
@@ -207,10 +210,36 @@ public:
 		if (call.get_toggle().has_value() && *call.get_toggle())
 		{
 			// User requested cover toggle
-			// if (last_operation == COVER_OPERATION_OPENING)
-			// 	last_operation = COVER_OPERATION_CLOSING;
-			// else
-			// 	last_operation = COVER_OPERATION_OPENING;
+			if (!settled) {
+				ESP_LOGD(__FILE__, "not settled, ignoring toggle command");
+				break;
+			}
+
+			CoverCall cc(this);
+
+			if (position == COVER_OPEN) {
+				cc.set_command_close();
+				cc.perform();
+			} else if (position == COVER_CLOSED) {
+				cc.set_command_open();
+				cc.perform();
+			} else {
+				if (current_operation == COVER_OPERATION_IDLE) {
+					if (last_operation == COVER_OPERATION_OPENING) {
+						cc.set_command_close();
+						cc.perform();
+					} else if (last_operation == COVER_OPERATION_CLOSING) {
+						cc.set_command_open();
+						cc.perform();
+					}
+				} else if (current_operation == COVER_OPERATION_OPENING) {
+					cc.set_command_close();
+					cc.perform();
+				} else if (current_operation == COVER_OPERATION_CLOSING) {
+					cc.set_command_open();
+					cc.perform();
+				}
+			}
 		}
 
 		if (call.get_stop())
@@ -218,6 +247,9 @@ public:
 			// User requested cover stop
 			stop();
 		}
+
+		} while (false);
+		
 	}
 
 	void loop() override
