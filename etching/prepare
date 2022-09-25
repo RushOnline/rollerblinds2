@@ -1,0 +1,21 @@
+#!/bin/bash
+
+gs                          \
+ -q                         \
+ -dBATCH                    \
+ -dNOPAUSE                  \
+ -sDEVICE=bbox              \
+ -dLastPage=1               \
+  $1                        \
+2>&1                        \
+| grep %%BoundingBox
+
+gs	-dBATCH			\
+	-dNOPAUSE		\
+	-sPAPERSIZE=a4		\
+	-dFIXEDMEDIA		\
+	-sDEVICE=pdfwrite	\
+	-sOutputFile=T_$1 	\
+  -c "<< /Install {50 0 translate} >> setpagedevice" \
+  -f $1
+#  -c "<< /Install {350 0 translate} >> setpagedevice" \
